@@ -36,8 +36,12 @@ FLAGS = tf.app.flags.FLAGS
 tf.app.flags.DEFINE_string('train_dir', '/tmp/imagenet_train',
                            """Directory where to write event logs """
                            """and checkpoint.""")
+
 tf.app.flags.DEFINE_integer('max_steps', 10000000,
                             """Number of batches to run.""")
+tf.app.flags.DEFINE_integer('num_sub_batches_per_batch', 1,
+                            """Number of sub batches to run per batch""")
+
 tf.app.flags.DEFINE_string('subset', 'train',
                            """Either 'train' or 'validation'.""")
 
@@ -223,42 +227,47 @@ def train(dataset):
     num_classes = dataset.num_classes() + 1
 
      # Split the batch of images and labels for towers.
-    images_splits = tf.split(axis=0, num_or_size_splits=FLAGS.num_gpus, value=images)
-    labels_splits = tf.split(axis=0, num_or_size_splits=FLAGS.num_gpus, value=labels)
+    images_splits = tf.split(axis=0, num_or_size_splits=FLAGS.num_gpus*FLAGS.num_sub_batches_per_batch, value=images)
+    labels_splits = tf.split(axis=0, num_or_size_splits=FLAGS.num_gpus*FLAGS.num_sub_batches_per_batch, value=labels)
 
     # Calculate the gradients for each model tower.
     tower_grads = []
     reuse_variables = None
     for i in range(FLAGS.num_gpus):
       with tf.device('/gpu:%d' % i):
-        with tf.name_scope('%s_%d' % (inception.TOWER_NAME, i)) as scope:
-          # Force all Variables to reside on the CPU.
-          with slim.arg_scope([slim.variables.variable], device='/cpu:0'):
-            # Calculate the loss for one tower of the ImageNet model. This
-            # function constructs the entire ImageNet model but shares the
-            # variables across all towers.
-            loss = _tower_loss(images_splits[i], labels_splits[i], num_classes,
-                               scope, reuse_variables)
+        for j in range(FLAGS.num_sub_batches_per_batch):
+            with tf.name_scope('%s_%d_%d' % (inception.TOWER_NAME, i, j)) as scope:
+              # Force all Variables to reside on the CPU.
+              with slim.arg_scope([slim.variables.variable], device='/cpu:0'):
+                # Calculate the loss for one tower of the ImageNet model. This
+                # function constructs the entire ImageNet model but shares the
+                # variables across all towers.
+                split_idx = i*FLAGS.num_sub_batches_per_batch+j
+                loss = _tower_loss(images_splits[split_idx],
+                                   labels_splits[split_idx],
+                                   num_classes,
+                                   scope,
+                                   reuse_variables)
 
-          # Reuse variables for the next tower.
-          reuse_variables = True
+              # Reuse variables for the next tower.
+              reuse_variables = True
 
-          # Retain the summaries from the final tower.
-          summaries = tf.get_collection(tf.GraphKeys.SUMMARIES, scope)
+              # Retain the summaries from the final tower.
+              summaries = tf.get_collection(tf.GraphKeys.SUMMARIES, scope)
 
-          # Retain the Batch Normalization updates operations only from the
-          # final tower. Ideally, we should grab the updates from all towers
-          # but these stats accumulate extremely fast so we can ignore the
-          # other stats from the other towers without significant detriment.
-          batchnorm_updates = tf.get_collection(slim.ops.UPDATE_OPS_COLLECTION,
-                                                scope)
+              # Retain the Batch Normalization updates operations only from the
+              # final tower. Ideally, we should grab the updates from all towers
+              # but these stats accumulate extremely fast so we can ignore the
+              # other stats from the other towers without significant detriment.
+              batchnorm_updates = tf.get_collection(slim.ops.UPDATE_OPS_COLLECTION,
+                                                    scope)
 
-          # Calculate the gradients for the batch of data on this ImageNet
-          # tower.
-          grads = opt.compute_gradients(loss)
+              # Calculate the gradients for the batch of data on this ImageNet
+              # tower.
+              grads = opt.compute_gradients(loss)
 
-          # Keep track of the gradients across all towers.
-          tower_grads.append(grads)
+              # Keep track of the gradients across all towers.
+              tower_grads.append(grads)
 
     # We must calculate the mean of each gradient. Note that this is the
     # synchronization point across all towers.
