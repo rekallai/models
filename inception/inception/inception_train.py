@@ -236,8 +236,8 @@ def train(dataset):
 
     for gpu_idx in range(FLAGS.num_gpus):
       with tf.device('/gpu:%d' % gpu_idx):
-        with tf.name_scope('%s_%d' % (inception.TOWER_NAME, gpu_idx)) as scope:
-          for sub_batch_idx in range(FLAGS.num_sub_batches_per_batch):
+        for sub_batch_idx in range(FLAGS.num_sub_batches_per_batch):
+          with tf.name_scope('%s_%d_%d' % (inception.TOWER_NAME, gpu_idx, sub_batch_idx)) as scope:
             # Force all Variables to reside on the CPU.
             with slim.arg_scope([slim.variables.variable], device='/cpu:0'):
               # Calculate the loss for one tower of the ImageNet model. This
