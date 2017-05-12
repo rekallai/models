@@ -188,7 +188,7 @@ def __add_tower_grads(current_summed_grads, new_grads):
 
   num_layers = len(current_summed_grads)
   for layer_idx in range(num_layers):
-    curent_layer_grad_and_vars =  current_summed_grads[layer_idx]
+    curent_layer_grad_and_vars = current_summed_grads[layer_idx]
     new_layer_grad_and_vars = new_grads[layer_idx]
 
     g_c = curent_layer_grad_and_vars[0]
@@ -304,7 +304,7 @@ def train(dataset):
             grads = opt.compute_gradients(loss)
 
         # force addition of gradients on CPU
-        with tf.name_scope('grad_summation'):
+        with tf.name_scope('grad_summation'), tf.device('/cpu:0'):
           if split_idx == 0:
             summed_tower_grads = grads
           else:
