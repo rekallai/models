@@ -249,6 +249,10 @@ def train(dataset):
 
     start_add = True
     num_grad_additions = FLAGS.num_gpus * FLAGS.num_batches_averaged_per_gradient
+
+    # Calculate the gradients for each model tower.
+    reuse_variables = None
+    
     for grad_add_iter in range(FLAGS.num_batches_averaged_per_gradient):
 
       # Override the number of preprocessing threads to account for the increased
@@ -264,16 +268,13 @@ def train(dataset):
       # Label 0 is reserved for an (unused) background class.
       num_classes = dataset.num_classes() + 1
 
-      # Calculate the gradients for each model tower.
-      reuse_variables = None
-
       # Split the batch of images and labels for towers.
       images_splits = tf.split(axis=0, num_or_size_splits=FLAGS.num_gpus, value=images)
       labels_splits = tf.split(axis=0, num_or_size_splits=FLAGS.num_gpus, value=labels)
 
       for gpu_idx in range(FLAGS.num_gpus):
         with tf.device('/gpu:%d' % gpu_idx):
-          with tf.name_scope('%s_%d' % (inception.TOWER_NAME, gpu_idx)) as scope:
+          with tf.name_scope('%s_%d_%d' % (inception.TOWER_NAME, gpu_idx, grad_add_iter)) as scope:
 
             # Force all Variables to reside on the CPU.
             with slim.arg_scope([slim.variables.variable], device='/cpu:0'):
@@ -304,7 +305,7 @@ def train(dataset):
             grads = opt.compute_gradients(loss)
 
             # force addition of gradients on CPU
-            with tf.device('/cpu:0'):
+            with slim.arg_scope([slim.variables.variable], device='/cpu:0'):
               if start_add:
                 start_add = False
                 summed_tower_grads = grads
