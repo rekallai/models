@@ -290,7 +290,7 @@ def train(dataset):
             # Reuse variables for the next tower.
             reuse_variables = True
 
-            if split_idx == num_iter:
+            if split_idx == (num_iter-1):
               # Retain the summaries from the final tower.
               summaries = tf.get_collection(tf.GraphKeys.SUMMARIES, scope)
 
