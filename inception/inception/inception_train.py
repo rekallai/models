@@ -184,17 +184,23 @@ def _average_gradients(tower_grads):
 
 
 def __add_tower_grads(current_summed_grads, new_grads):
+  new_summed_grads = []
+
   num_layers = len(current_summed_grads)
   for layer_idx in range(num_layers):
     curent_layer_grad_and_vars =  current_summed_grads[layer_idx]
     new_layer_grad_and_vars = new_grads[layer_idx]
 
     g_c = curent_layer_grad_and_vars[0]
+    v_c = curent_layer_grad_and_vars[1]
+
     g_new = new_layer_grad_and_vars[0]
 
-    curent_layer_grad_and_vars[0] = tf.add(g_c, g_new)
+    summed_grad = tf.add(g_c, g_new)
 
-  return current_summed_grads
+    new_summed_grads.append((summed_grad, v_c))
+
+  return new_summed_grads
 
 
 def _calc_average_gradients_from(summed_tower_grads, num_iter):
