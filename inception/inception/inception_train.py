@@ -269,8 +269,8 @@ def train(dataset):
 
     for gpu_idx in range(FLAGS.num_gpus):
       with tf.device('/gpu:%d' % gpu_idx):
-        for sub_batch_idx in range(FLAGS.num_sub_batches_per_batch):
-          with tf.name_scope('%s_%d_%d' % (inception.TOWER_NAME, gpu_idx, sub_batch_idx)) as scope:
+        with tf.name_scope('%s_%d' % (inception.TOWER_NAME, gpu_idx)) as scope:
+          for sub_batch_idx in range(FLAGS.num_sub_batches_per_batch):
 
             split_idx = gpu_idx * FLAGS.num_sub_batches_per_batch + sub_batch_idx
 
