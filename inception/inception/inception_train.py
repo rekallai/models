@@ -304,10 +304,12 @@ def train(dataset):
             # tower.
             grads = opt.compute_gradients(loss)
 
-            if split_idx == 0:
-              summed_tower_grads = grads
-            else:
-              summed_tower_grads = __add_tower_grads(summed_tower_grads, grads)
+            # force addition of gradients on CPU
+            with tf.device('/cpu:0'):
+              if split_idx == 0:
+                summed_tower_grads = grads
+              else:
+                summed_tower_grads = __add_tower_grads(summed_tower_grads, grads)
 
     # We must calculate the mean of each gradient. Note that this is the
     # synchronization point across all towers.
