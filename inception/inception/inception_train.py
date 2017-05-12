@@ -203,9 +203,9 @@ def _calc_average_gradients_from(summed_tower_grads, num_iter):
     g = layer_grad_and_vars[0]
     v = layer_grad_and_vars[1]
 
-    grad = tf.scalar_mul(1/num_iter, g)
+    average_layer_grad = tf.scalar_mul(1/num_iter, g)
 
-    average_grad.append((g, v))
+    average_grad.append((average_layer_grad, v))
 
   return average_grad
 
