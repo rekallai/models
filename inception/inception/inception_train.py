@@ -39,6 +39,7 @@ tf.app.flags.DEFINE_string('train_dir', '/tmp/imagenet_train',
 
 tf.app.flags.DEFINE_integer('max_steps', 10000000,
                             """Number of batches to run.""")
+
 tf.app.flags.DEFINE_integer('num_sub_batches_per_batch', 1,
                             """Number of sub batches to run per batch""")
 
@@ -182,6 +183,33 @@ def _average_gradients(tower_grads):
   return average_grads
 
 
+def __add_tower_grads(current_summed_grads, new_grads):
+  num_layers = len(current_summed_grads)
+  for layer_idx in range(num_layers):
+    curent_layer_grad_and_vars =  current_summed_grads[layer_idx]
+    new_layer_grad_and_vars = new_grads[layer_idx]
+
+    g_c = curent_layer_grad_and_vars[0]
+    g_new = new_layer_grad_and_vars[0]
+
+    curent_layer_grad_and_vars[0] = tf.add(g_c, g_new)
+
+  return current_summed_grads
+
+
+def _calc_average_gradients_from(summed_tower_grads, num_iter):
+  average_grad=[]
+  for layer_grad_and_vars in summed_tower_grads:
+    g = layer_grad_and_vars[0]
+    v = layer_grad_and_vars[1]
+
+    grad = tf.scalar_mul(1/num_iter, g)
+
+    average_grad.append((g, v))
+
+  return average_grad
+
+
 def train(dataset):
   """Train on dataset for a number of steps."""
   with tf.Graph().as_default(), tf.device('/cpu:0'):
@@ -231,19 +259,20 @@ def train(dataset):
     labels_splits = tf.split(axis=0, num_or_size_splits=FLAGS.num_gpus*FLAGS.num_sub_batches_per_batch, value=labels)
 
     # Calculate the gradients for each model tower.
-    tower_grads = []
     reuse_variables = None
 
     for gpu_idx in range(FLAGS.num_gpus):
       with tf.device('/gpu:%d' % gpu_idx):
         for sub_batch_idx in range(FLAGS.num_sub_batches_per_batch):
           with tf.name_scope('%s_%d_%d' % (inception.TOWER_NAME, gpu_idx, sub_batch_idx)) as scope:
+
+            split_idx = gpu_idx * FLAGS.num_sub_batches_per_batch + sub_batch_idx
+
             # Force all Variables to reside on the CPU.
             with slim.arg_scope([slim.variables.variable], device='/cpu:0'):
               # Calculate the loss for one tower of the ImageNet model. This
               # function constructs the entire ImageNet model but shares the
               # variables across all towers.
-              split_idx = gpu_idx * FLAGS.num_sub_batches_per_batch + sub_batch_idx
               print("gpu : %d, split_idx : %d" % (gpu_idx, split_idx))
               print("images_splits[split_idx] : " + str(images_splits[split_idx].get_shape()))
               loss = _tower_loss(images_splits[split_idx],
@@ -269,12 +298,15 @@ def train(dataset):
             # tower.
             grads = opt.compute_gradients(loss)
 
-            # Keep track of the gradients across all towers.
-            tower_grads.append(grads)
+            if split_idx == 0:
+              summed_tower_grads = grads
+            else:
+              summed_tower_grads = __add_tower_grads(summed_tower_grads, grads)
 
     # We must calculate the mean of each gradient. Note that this is the
     # synchronization point across all towers.
-    grads = _average_gradients(tower_grads)
+    num_iter = FLAGS.num_gpus*FLAGS.num_sub_batches_per_batch
+    grads = _calc_average_gradients_from(summed_tower_grads, num_iter)
 
     # Add a summaries for the input processing and global_step.
     summaries.extend(input_summaries)
