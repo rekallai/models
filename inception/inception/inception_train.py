@@ -266,7 +266,7 @@ def train(dataset):
 
     # Calculate the gradients for each model tower.
     reuse_variables = None
-
+    num_iter = FLAGS.num_gpus * FLAGS.num_sub_batches_per_batch
     for gpu_idx in range(FLAGS.num_gpus):
       with tf.device('/gpu:%d' % gpu_idx):
         for sub_batch_idx in range(FLAGS.num_sub_batches_per_batch):
@@ -290,15 +290,16 @@ def train(dataset):
             # Reuse variables for the next tower.
             reuse_variables = True
 
-            # Retain the summaries from the final tower.
-            summaries = tf.get_collection(tf.GraphKeys.SUMMARIES, scope)
+            if split_idx == num_iter:
+              # Retain the summaries from the final tower.
+              summaries = tf.get_collection(tf.GraphKeys.SUMMARIES, scope)
 
-            # Retain the Batch Normalization updates operations only from the
-            # final tower. Ideally, we should grab the updates from all towers
-            # but these stats accumulate extremely fast so we can ignore the
-            # other stats from the other towers without significant detriment.
-            batchnorm_updates = tf.get_collection(slim.ops.UPDATE_OPS_COLLECTION,
-                                                  scope)
+              # Retain the Batch Normalization updates operations only from the
+              # final tower. Ideally, we should grab the updates from all towers
+              # but these stats accumulate extremely fast so we can ignore the
+              # other stats from the other towers without significant detriment.
+              batchnorm_updates = tf.get_collection(slim.ops.UPDATE_OPS_COLLECTION,
+                                                    scope)
 
             # Calculate the gradients for the batch of data on this ImageNet
             # tower.
@@ -313,7 +314,6 @@ def train(dataset):
 
     # We must calculate the mean of each gradient. Note that this is the
     # synchronization point across all towers.
-    num_iter = FLAGS.num_gpus*FLAGS.num_sub_batches_per_batch
     grads = _calc_average_gradients_from(summed_tower_grads, num_iter)
 
     # Add a summaries for the input processing and global_step.
