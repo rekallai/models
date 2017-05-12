@@ -269,8 +269,8 @@ def train(dataset):
 
     for gpu_idx in range(FLAGS.num_gpus):
       with tf.device('/gpu:%d' % gpu_idx):
-        with tf.name_scope('%s_%d' % (inception.TOWER_NAME, gpu_idx)) as scope:
-          for sub_batch_idx in range(FLAGS.num_sub_batches_per_batch):
+        for sub_batch_idx in range(FLAGS.num_sub_batches_per_batch):
+          with tf.name_scope('%s_%d' % (inception.TOWER_NAME, gpu_idx)) as scope:
 
             split_idx = gpu_idx * FLAGS.num_sub_batches_per_batch + sub_batch_idx
 
@@ -305,7 +305,7 @@ def train(dataset):
             grads = opt.compute_gradients(loss)
 
             # force addition of gradients on CPU
-            with tf.device('/cpu:0'):
+            with slim.arg_scope([slim.variables.variable], device='/cpu:0'):
               if split_idx == 0:
                 summed_tower_grads = grads
               else:
