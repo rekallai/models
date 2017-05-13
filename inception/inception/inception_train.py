@@ -267,48 +267,48 @@ def train(dataset):
     # Calculate the gradients for each model tower.
     reuse_variables = None
 
-    for sub_batch_idx in range(FLAGS.num_sub_batches_per_batch):
       for gpu_idx in range(FLAGS.num_gpus):
         with tf.device('/gpu:%d' % gpu_idx):
           with tf.name_scope('%s_%d' % (inception.TOWER_NAME, gpu_idx)) as scope:
-            split_idx = gpu_idx * FLAGS.num_sub_batches_per_batch + sub_batch_idx
+            for sub_batch_idx in range(FLAGS.num_sub_batches_per_batch):
+              split_idx = gpu_idx * FLAGS.num_sub_batches_per_batch + sub_batch_idx
 
-            # Force all Variables to reside on the CPU.
-            with slim.arg_scope([slim.variables.variable], device='/cpu:0'):
-              # Calculate the loss for one tower of the ImageNet model. This
-              # function constructs the entire ImageNet model but shares the
-              # variables across all towers.
-              print("gpu : %d, split_idx : %d" % (gpu_idx, split_idx))
-              print("images_splits[split_idx] : " + str(images_splits[split_idx].get_shape()))
-              loss = _tower_loss(images_splits[split_idx],
-                                 labels_splits[split_idx],
-                                 num_classes,
-                                 scope,
-                                 reuse_variables)
+              # Force all Variables to reside on the CPU.
+              with slim.arg_scope([slim.variables.variable], device='/cpu:0'):
+                # Calculate the loss for one tower of the ImageNet model. This
+                # function constructs the entire ImageNet model but shares the
+                # variables across all towers.
+                print("gpu : %d, split_idx : %d" % (gpu_idx, split_idx))
+                print("images_splits[split_idx] : " + str(images_splits[split_idx].get_shape()))
+                loss = _tower_loss(images_splits[split_idx],
+                                   labels_splits[split_idx],
+                                   num_classes,
+                                   scope,
+                                   reuse_variables)
 
-            # Reuse variables for the next tower.
-            reuse_variables = True
+              # Reuse variables for the next tower.
+              reuse_variables = True
 
-            # Retain the summaries from the final tower.
-            summaries = tf.get_collection(tf.GraphKeys.SUMMARIES, scope)
+              # Retain the summaries from the final tower.
+              summaries = tf.get_collection(tf.GraphKeys.SUMMARIES, scope)
 
-            # Retain the Batch Normalization updates operations only from the
-            # final tower. Ideally, we should grab the updates from all towers
-            # but these stats accumulate extremely fast so we can ignore the
-            # other stats from the other towers without significant detriment.
-            batchnorm_updates = tf.get_collection(slim.ops.UPDATE_OPS_COLLECTION,
-                                                  scope)
+              # Retain the Batch Normalization updates operations only from the
+              # final tower. Ideally, we should grab the updates from all towers
+              # but these stats accumulate extremely fast so we can ignore the
+              # other stats from the other towers without significant detriment.
+              batchnorm_updates = tf.get_collection(slim.ops.UPDATE_OPS_COLLECTION,
+                                                    scope)
 
-            # Calculate the gradients for the batch of data on this ImageNet
-            # tower.
-            grads = opt.compute_gradients(loss)
+              # Calculate the gradients for the batch of data on this ImageNet
+              # tower.
+              grads = opt.compute_gradients(loss)
 
-        # force addition of gradients on CPU
-        with tf.name_scope('grad_summation'), tf.device('/cpu:0'):
-          if split_idx == 0:
-            summed_tower_grads = grads
-          else:
-            summed_tower_grads = __add_tower_grads(summed_tower_grads, grads)
+              # force addition of gradients on CPU
+              with tf.device('/cpu:0'):
+                if split_idx == 0:
+                  summed_tower_grads = grads
+                else:
+                  summed_tower_grads = __add_tower_grads(summed_tower_grads, grads)
 
     # We must calculate the mean of each gradient. Note that this is the
     # synchronization point across all towers.
