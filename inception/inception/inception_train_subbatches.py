@@ -280,7 +280,7 @@ def train(dataset):
                                     momentum=RMSPROP_MOMENTUM,
                                     epsilon=RMSPROP_EPSILON)
 
-    sub_batch_size = FLAGS.batch_size / FLAGS.num_sub_batches_per_batch
+    sub_batch_size = int(FLAGS.batch_size / FLAGS.num_sub_batches_per_batch)
 
     get_data_splits = get_new_image_and_label_batch_splits(
       dataset,
