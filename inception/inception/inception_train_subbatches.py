@@ -300,6 +300,7 @@ def train(dataset):
     sess.run(init)
 
     data_splits = sess.run(get_data_splits)
+    print(data_splits)
 
 
 # for step in range(FLAGS.max_steps):
