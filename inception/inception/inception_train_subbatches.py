@@ -31,6 +31,8 @@ from inception import image_processing
 from inception import inception_model as inception
 from inception.slim import slim
 
+from inception import tfconnect as tfc
+
 FLAGS = tf.app.flags.FLAGS
 
 tf.app.flags.DEFINE_string('train_dir', '/tmp/imagenet_train',
@@ -151,23 +153,6 @@ def calc_gradients(opt, images_splits, labels_splits, num_classes):
                 tower_grads.append(grads)
 
     return tower_grads, batchnorm_updates
-
-
-def _create_subbatch_placeholders_for(
-        type,
-        num_sub_batches_per_batch=FLAGS.num_sub_batches_per_batch,
-        num_gpus=FLAGS.num_gpus):
-
-    placeholders = []
-    placeholder_names = []
-    for sub_batch_idx in range(num_sub_batches_per_batch):
-        for gpu_idx in range(num_gpus):
-            name = 'subbatch_%s_%d_%d' % (type, sub_batch_idx, gpu_idx)
-
-            placeholders.append(tf.placeholder(tf.float32, name=name))
-            placeholder_names.append(name)
-
-    return placeholders, placeholder_names
 
 
 def _tower_loss(images, labels, num_classes, scope, reuse_variables=None):
@@ -308,13 +293,16 @@ def train(dataset):
         # Label 0 is reserved for an (unused) background class.
         num_classes = dataset.num_classes() + 1
 
-        # Annoying, need to create two versions of this sub graph
-        get_subbatch_gradients = calc_gradients(opt, images_splits, labels_splits, num_classes)
+        get_tower_grads, get_batchnorm_updates = calc_gradients(opt, images_splits, labels_splits, num_classes)
 
-        #subbatch_gradients, subbatch_gradient_names = _create_subbatch_placeholders_for('gradient')
-        #subbatch_batchnorm_updates, subbatch_batchnorm_update_names = _create_subbatch_placeholders_for('batchnorm_update')
+        # Create the placeholder structure to connect all the subbatch gradient data to the averaging step
+        tower_grads_list_placeholder = []
+        counter = -1
+        for sub_batch_idx in range(FLAGS.num_sub_batches_per_batch):
+            tower_grads_placeholder, counter = tfc.create_placeholder_for(get_tower_grads, 'tower_grads', counter)
+            tower_grads_list_placeholder += tower_grads_placeholder
 
-        #calc_averaged_gradient = average_gradients(subbatch_gradients)
+        calc_averaged_gradient = average_gradients(tower_grads_list_placeholder)
 
         # Build an initialization operation to run below.
         init = tf.global_variables_initializer()
@@ -331,15 +319,13 @@ def train(dataset):
 
         subbatch_gradients = []
         for sub_batch_idx in range(FLAGS.num_sub_batches_per_batch):
-            tower_grads, batchnorm_updates = sess.run(get_subbatch_gradients)
+            tower_grads, batchnorm_updates = sess.run((get_tower_grads, get_batchnorm_updates))
             subbatch_gradients += tower_grads
 
-        # av_gradient_feed = {name: grad for name, grad in zip(subbatch_gradient_names, subbatch_gradients)}
+        av_gradient_feed = tfc.create_feed_based_on(subbatch_gradients, 'tower_grads')
 
-        # av_gradients = sess.run(calc_averaged_gradient, av_gradient_feed)
-        # print(type(av_gradients))
-
-
+        av_gradients = sess.run(calc_averaged_gradient, av_gradient_feed)
+        print(type(av_gradients))
 
 
 # for step in range(FLAGS.max_steps):
