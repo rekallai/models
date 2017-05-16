@@ -330,7 +330,7 @@ def train(dataset):
 
         # Create a saver.
         saver = tf.train.Saver(tf.global_variables())
-        
+
         # Build an initialization operation to run below.
         init = tf.global_variables_initializer()
 
