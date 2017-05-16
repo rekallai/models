@@ -33,6 +33,8 @@ from inception.slim import slim
 
 from inception import tfconnect as tfc
 
+import sys
+
 FLAGS = tf.app.flags.FLAGS
 
 tf.app.flags.DEFINE_string('train_dir', '/tmp/imagenet_train',
@@ -152,7 +154,7 @@ def calc_gradients(opt, images_splits, labels_splits, num_classes):
                 # Keep track of the gradients across all towers.
                 tower_grads.append(grads)
 
-    return tower_grads, batchnorm_updates
+    return tower_grads, batchnorm_updates, loss
 
 
 def _tower_loss(images, labels, num_classes, scope, reuse_variables=None):
@@ -293,16 +295,32 @@ def train(dataset):
         # Label 0 is reserved for an (unused) background class.
         num_classes = dataset.num_classes() + 1
 
-        get_tower_grads, get_batchnorm_updates = calc_gradients(opt, images_splits, labels_splits, num_classes)
+        get_tower_grads, get_batchnorm_updates, calc_loss = calc_gradients(
+            opt,
+            images_splits,
+            labels_splits,
+            num_classes)
 
         # Create the placeholder structure to connect all the subbatch gradient data to the averaging step
         tower_grads_list_placeholder = []
         counter = -1
+        is_variable = dict()
         for sub_batch_idx in range(FLAGS.num_sub_batches_per_batch):
-            tower_grads_placeholder, counter = tfc.create_placeholder_for(get_tower_grads, 'tower_grads', counter)
+            tower_grads_placeholder, counter, is_variable = tfc.create_placeholder_for(
+                get_tower_grads,
+                'tower_grads',
+                counter,
+                is_variable)
             tower_grads_list_placeholder += tower_grads_placeholder
 
         calc_averaged_gradient = average_gradients(tower_grads_list_placeholder)
+
+        # Apply the gradients to adjust the shared variables.
+        apply_gradient = opt.apply_gradients(calc_averaged_gradient, global_step=global_step)
+
+        # Group all updates to into a single train op.
+        # batchnorm_updates_op = tf.group(*batchnorm_updates)
+        train_op = tf.group(apply_gradient)
 
         # Build an initialization operation to run below.
         init = tf.global_variables_initializer()
@@ -317,16 +335,30 @@ def train(dataset):
 
         tf.train.start_queue_runners(sess=sess)
 
-        subbatch_gradients = []
-        for sub_batch_idx in range(FLAGS.num_sub_batches_per_batch):
-            tower_grads, batchnorm_updates = sess.run((get_tower_grads, get_batchnorm_updates))
-            subbatch_gradients += tower_grads
+        for step in range(FLAGS.max_steps):
+            start_time = time.time()
 
-        av_gradient_feed = tfc.create_feed_based_on(subbatch_gradients, 'tower_grads')
+            subbatch_gradients = []
+            for sub_batch_idx in range(FLAGS.num_sub_batches_per_batch):
+                tower_grads, batchnorm_updates = sess.run((get_tower_grads, get_batchnorm_updates))
+                subbatch_gradients += tower_grads
+                sys.stdout.write('*')
+            print()
 
-        av_gradients = sess.run(calc_averaged_gradient, av_gradient_feed)
-        print(type(av_gradients))
+            av_gradient_feed, _ = tfc.create_feed_based_on(subbatch_gradients, 'tower_grads', is_variable)
 
+            _, loss_value = sess.run([apply_gradient, calc_loss], av_gradient_feed)
+
+            duration = time.time() - start_time
+
+            assert not np.isnan(loss_value), 'Model diverged with loss = NaN'
+
+            if step % 10 == 0:
+                examples_per_sec = FLAGS.batch_size / float(duration)
+                format_str = ('%s: step %d, loss = %.2f (%.1f examples/sec; %.3f '
+                              'sec/batch)')
+                print(format_str % (datetime.now(), step, loss_value,
+                                    examples_per_sec, duration))
 
 # for step in range(FLAGS.max_steps):
 #
