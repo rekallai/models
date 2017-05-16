@@ -135,6 +135,7 @@ def calc_gradients(opt, images_splits, labels_splits, num_classes):
     # Calculate the gradients for each model tower.
     tower_grads = []
     batchnorm_updates = []
+    loss = []
     for i in range(FLAGS.num_gpus):
         with tf.device('/gpu:%d' % i):
             with tf.name_scope('%s_%d' % (inception.TOWER_NAME, i)) as scope:
@@ -143,16 +144,18 @@ def calc_gradients(opt, images_splits, labels_splits, num_classes):
                     # Calculate the loss for one tower of the ImageNet model. This
                     # function constructs the entire ImageNet model but shares the
                     # variables across all towers.
-                    loss = _tower_loss(images_splits[i], labels_splits[i], num_classes,
+                    batch_loss = _tower_loss(images_splits[i], labels_splits[i], num_classes,
                                        scope, REUSE_VARIABLES)
 
                 REUSE_VARIABLES = True
 
                 batchnorm_updates.append(tf.get_collection(slim.ops.UPDATE_OPS_COLLECTION, scope))
 
+                loss.append(batch_loss)
+
                 # Calculate the gradients for the batch of data on this ImageNet
                 # tower.
-                grads = opt.compute_gradients(loss)
+                grads = opt.compute_gradients(batch_loss)
 
                 # Keep track of the gradients across all towers.
                 tower_grads.append(grads)
@@ -325,6 +328,9 @@ def train(dataset):
         # batchnorm_updates_op = tf.group(*batchnorm_updates)
         train_op = tf.group(apply_gradient)
 
+        # Create a saver.
+        saver = tf.train.Saver(tf.global_variables())
+        
         # Build an initialization operation to run below.
         init = tf.global_variables_initializer()
 
@@ -350,15 +356,23 @@ def train(dataset):
 
             av_gradient_feed, _ = tfc.create_feed_based_on(subbatch_gradients, 'tower_grads', is_variable)
 
-            _, loss_value = sess.run([apply_gradient, calc_loss], av_gradient_feed)
+            sess.run(apply_gradient, av_gradient_feed)
+            loss_values = sess.run(calc_loss)
+            av_loss = sum(loss_values) / float(len(loss_values))
 
             duration = time.time() - start_time
 
-            assert not np.isnan(loss_value), 'Model diverged with loss = NaN'
+            assert not np.isnan(av_loss), 'Model diverged with loss = NaN'
 
             if step % 10 == 0:
                 examples_per_sec = FLAGS.batch_size / float(duration)
                 format_str = ('%s: step %d, loss = %.2f (%.1f examples/sec; %.3f '
                               'sec/batch)')
-                print(format_str % (datetime.now(), step, loss_value,
+                print(format_str % (datetime.now(), step, av_loss,
                                     examples_per_sec, duration))
+
+            # Save the model checkpoint periodically.
+            if step % 5000 == 0 or (step + 1) == FLAGS.max_steps:
+                checkpoint_path = os.path.join(FLAGS.train_dir, 'model.ckpt')
+                saver.save(sess, checkpoint_path, global_step=step)
+
