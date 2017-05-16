@@ -372,7 +372,10 @@ def train(dataset):
                                     examples_per_sec, duration))
 
             # Save the model checkpoint periodically.
-            if step % 5000 == 0 or (step + 1) == FLAGS.max_steps:
+            if step % 500 == 0 or (step + 1) == FLAGS.max_steps:
                 checkpoint_path = os.path.join(FLAGS.train_dir, 'model.ckpt')
                 saver.save(sess, checkpoint_path, global_step=step)
+
+            # Ensure log output gets updated
+            sys.stdout.flush()
 
