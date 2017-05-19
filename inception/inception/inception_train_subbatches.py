@@ -136,6 +136,7 @@ def calc_gradients(opt, images_splits, labels_splits, num_classes):
     tower_grads = []
     batchnorm_updates = []
     loss = []
+    summaries = []
     for i in range(FLAGS.num_gpus):
         with tf.device('/gpu:%d' % i):
             with tf.name_scope('%s_%d' % (inception.TOWER_NAME, i)) as scope:
@@ -149,6 +150,9 @@ def calc_gradients(opt, images_splits, labels_splits, num_classes):
 
                 REUSE_VARIABLES = True
 
+                # Retain the summaries from the final tower.
+                summaries.append(tf.get_collection(tf.GraphKeys.SUMMARIES, scope))
+
                 batchnorm_updates.append(tf.get_collection(slim.ops.UPDATE_OPS_COLLECTION, scope))
 
                 loss.append(batch_loss)
@@ -160,7 +164,7 @@ def calc_gradients(opt, images_splits, labels_splits, num_classes):
                 # Keep track of the gradients across all towers.
                 tower_grads.append(grads)
 
-    return tower_grads, batchnorm_updates, loss
+    return tower_grads, batchnorm_updates, loss, summaries
 
 
 def _tower_loss(images, labels, num_classes, scope, reuse_variables=None):
@@ -297,11 +301,13 @@ def train(dataset):
             num_gpus=FLAGS.num_gpus,
             num_preprocess_threads_per_gpu=FLAGS.num_preprocess_threads)
 
+        input_summaries = copy.copy(tf.get_collection(tf.GraphKeys.SUMMARIES))
+
         # Number of classes in the Dataset label set plus 1.
         # Label 0 is reserved for an (unused) background class.
         num_classes = dataset.num_classes() + 1
 
-        get_tower_grads, get_batchnorm_updates, calc_loss = calc_gradients(
+        get_tower_grads, get_batchnorm_updates, calc_loss, summaries = calc_gradients(
             opt,
             images_splits,
             labels_splits,
@@ -321,6 +327,12 @@ def train(dataset):
 
         calc_averaged_gradient = average_gradients(tower_grads_list_placeholder)
 
+        # Add a summaries for the input processing and global_step.
+        summaries.extend(input_summaries)
+
+        # Add a summary to track the learning rate.
+        summaries.append(tf.summary.scalar('learning_rate', lr))
+
         # Apply the gradients to adjust the shared variables.
         apply_gradient = opt.apply_gradients(calc_averaged_gradient, global_step=global_step)
 
@@ -330,6 +342,9 @@ def train(dataset):
 
         # Create a saver.
         saver = tf.train.Saver(tf.global_variables())
+
+        # Build the summary operation from the last tower summaries.
+        summary_op = tf.summary.merge(summaries)
 
         # Build an initialization operation to run below.
         init = tf.global_variables_initializer()
@@ -342,7 +357,20 @@ def train(dataset):
             log_device_placement=FLAGS.log_device_placement))
         sess.run(init)
 
+        if FLAGS.pretrained_model_checkpoint_path:
+            assert tf.gfile.Exists(FLAGS.pretrained_model_checkpoint_path)
+            variables_to_restore = tf.get_collection(
+                slim.variables.VARIABLES_TO_RESTORE)
+            restorer = tf.train.Saver(variables_to_restore)
+            restorer.restore(sess, FLAGS.pretrained_model_checkpoint_path)
+            print('%s: Pre-trained model restored from %s' %
+                  (datetime.now(), FLAGS.pretrained_model_checkpoint_path))
+
         tf.train.start_queue_runners(sess=sess)
+
+        summary_writer = tf.summary.FileWriter(
+            FLAGS.train_dir,
+            graph=sess.graph)
 
         for step in range(FLAGS.max_steps):
             start_time = time.time()
@@ -370,6 +398,10 @@ def train(dataset):
                               'sec/batch)')
                 print(format_str % (datetime.now(), step, av_loss,
                                     examples_per_sec, duration))
+
+            if step % 100 == 0:
+                summary_str = sess.run(summary_op)
+                summary_writer.add_summary(summary_str, step)
 
             # Save the model checkpoint periodically.
             if step % 500 == 0 or (step + 1) == FLAGS.max_steps:
