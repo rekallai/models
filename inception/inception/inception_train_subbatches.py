@@ -358,7 +358,7 @@ def train(dataset):
         sess.run(init)
 
         if FLAGS.pretrained_model_checkpoint_path:
-            assert tf.gfile.Exists(FLAGS.pretrained_model_checkpoint_path)
+            #assert tf.gfile.Exists(FLAGS.pretrained_model_checkpoint_path)
             variables_to_restore = tf.get_collection(
                 slim.variables.VARIABLES_TO_RESTORE)
             restorer = tf.train.Saver(variables_to_restore)
