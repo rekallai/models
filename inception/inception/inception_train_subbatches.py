@@ -153,7 +153,7 @@ def calc_gradients(opt, images_splits, labels_splits, num_classes):
                 # Retain the summaries from the final tower.
                 summaries.append(tf.get_collection(tf.GraphKeys.SUMMARIES, scope))
 
-                batchnorm_updates.append(tf.get_collection(slim.ops.UPDATE_OPS_COLLECTION, scope))
+                batchnorm_updates += tf.get_collection(slim.ops.UPDATE_OPS_COLLECTION, scope)
 
                 loss.append(batch_loss)
 
