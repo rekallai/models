@@ -307,7 +307,7 @@ def train(dataset):
         # Label 0 is reserved for an (unused) background class.
         num_classes = dataset.num_classes() + 1
 
-        get_tower_grads, get_batchnorm_updates, calc_loss, summaries = calc_gradients(
+        get_tower_grads, do_batchnorm_updates, calc_loss, summaries = calc_gradients(
             opt,
             images_splits,
             labels_splits,
@@ -336,9 +336,21 @@ def train(dataset):
         # Apply the gradients to adjust the shared variables.
         apply_gradient = opt.apply_gradients(calc_averaged_gradient, global_step=global_step)
 
-        # Group all updates to into a single train op.
-        # batchnorm_updates_op = tf.group(*batchnorm_updates)
-        train_op = tf.group(apply_gradient)
+        # Add histograms for trainable variables.
+        for var in tf.trainable_variables():
+            summaries.append(tf.summary.histogram(var.op.name, var))
+
+        # Track the moving averages of all trainable variables.
+        # Note that we maintain a "double-average" of the BatchNormalization
+        # global statistics. This is more complicated then need be but we employ
+        # this for backward-compatibility with our previous models.
+        variable_averages = tf.train.ExponentialMovingAverage(
+            inception.MOVING_AVERAGE_DECAY, global_step)
+
+        # Another possibility is to use tf.slim.get_variables().
+        variables_to_average = (tf.trainable_variables() +
+                                tf.moving_average_variables())
+        variables_averages_op = variable_averages.apply(variables_to_average)
 
         # Create a saver.
         saver = tf.train.Saver(tf.global_variables())
@@ -377,18 +389,30 @@ def train(dataset):
 
             subbatch_gradients = []
             for sub_batch_idx in range(FLAGS.num_sub_batches_per_batch):
-                tower_grads, batchnorm_updates = sess.run((get_tower_grads, get_batchnorm_updates))
+                tower_grads, _ = sess.run((get_tower_grads, do_batchnorm_updates))
                 subbatch_gradients += tower_grads
                 sys.stdout.write('*')
-            print()
 
             av_gradient_feed, _ = tfc.create_feed_based_on(subbatch_gradients, 'tower_grads', is_variable)
 
+            sys.stdout.write('>')
             sess.run(apply_gradient, av_gradient_feed)
+            sys.stdout.flush()
+
+            sys.stdout.write('~')
+            sess.run(variables_averages_op)
+            sys.stdout.flush()
+
+            sys.stdout.write('?')
             loss_values = sess.run(calc_loss)
             av_loss = sum(loss_values) / float(len(loss_values))
+            sys.stdout.flush()
 
             duration = time.time() - start_time
+            sys.stdout.write('READY')
+            sys.stdout.flush()
+
+            print()
 
             assert not np.isnan(av_loss), 'Model diverged with loss = NaN'
 
