@@ -30,12 +30,6 @@ import time
 import numpy as np
 import tensorflow as tf
 
-from inception import image_processing
-from inception import inception_model as inception
-from inception.slim import slim
-
-from inception import tfconnect as tfc
-
 import sys
 
 FLAGS = tf.app.flags.FLAGS
@@ -84,6 +78,13 @@ tf.app.flags.DEFINE_float('num_epochs_per_decay', 30.0,
                           """Epochs after which learning rate decays.""")
 tf.app.flags.DEFINE_float('learning_rate_decay_factor', 0.16,
                           """Learning rate decay factor.""")
+
+
+from inception import image_processing
+from inception import inception_model as inception
+from inception.slim import slim
+
+from inception import tfconnect as tfc
 
 # Constants dictating the learning rate schedule.
 RMSPROP_DECAY = 0.9  # Decay term for RMSProp.
