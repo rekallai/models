@@ -41,7 +41,7 @@ TOWER_NAME = 'tower'
 # the 'global' mean and variance for all activations.
 # Take in to account that the averages are updated per sub-batch
 BATCHNORM_MOVING_AVERAGE_DECAY = 0.9997**(1/float(FLAGS.num_sub_batches_per_batch))
-print('BATCHNORM_MOVING_AVERAGE_DECAY : %d' % BATCHNORM_MOVING_AVERAGE_DECAY)
+print('BATCHNORM_MOVING_AVERAGE_DECAY : %f' % BATCHNORM_MOVING_AVERAGE_DECAY)
 
 # The decay to use for the moving average.
 MOVING_AVERAGE_DECAY = 0.9999
