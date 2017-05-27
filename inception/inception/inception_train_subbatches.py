@@ -227,7 +227,6 @@ def _tower_loss(images, labels, num_classes, scope, reuse_variables=None):
         total_loss = tf.identity(total_loss)
     return total_loss
 
-
 def average_gradients(tower_grads):
     """Calculate the average gradient for each shared variable across all towers.
   
@@ -265,6 +264,17 @@ def average_gradients(tower_grads):
         average_grads.append(grad_and_var)
 
     return average_grads
+
+
+def __create_list_placeholder_for(op, op_name):
+    list_placeholder = []
+    counter = -1
+    is_variable = dict()
+    for sub_batch_idx in range(FLAGS.num_sub_batches_per_batch):
+        placeholder, counter, is_variable = tfc.create_placeholder_for(op, op_name, counter, is_variable)
+        list_placeholder += placeholder
+
+    return list_placeholder, is_variable
 
 
 def train(dataset):
@@ -314,18 +324,16 @@ def train(dataset):
             num_classes)
 
         # Create the placeholder structure to connect all the subbatch gradient data to the averaging step
-        tower_grads_list_placeholder = []
-        counter = -1
-        is_variable = dict()
-        for sub_batch_idx in range(FLAGS.num_sub_batches_per_batch):
-            tower_grads_placeholder, counter, is_variable = tfc.create_placeholder_for(
-                get_tower_grads,
-                'tower_grads',
-                counter,
-                is_variable)
-            tower_grads_list_placeholder += tower_grads_placeholder
+        tg_list_placeholder, tg_list_is_variable = __create_list_placeholder_for(
+            get_tower_grads,
+            'tower_grads')
 
-        calc_averaged_gradient = average_gradients(tower_grads_list_placeholder)
+        # Create the placeholder structure to run all subbatch batch-norm update operations
+        bn_list_placeholder, bn_list_is_variable = __create_list_placeholder_for(
+            get_batchnorm_updates,
+            'batch_norm_updates')
+
+        calc_averaged_gradient = average_gradients(tg_list_placeholder)
 
         # Add a summaries for the input processing and global_step.
         summaries.extend(input_summaries)
@@ -336,9 +344,25 @@ def train(dataset):
         # Apply the gradients to adjust the shared variables.
         apply_gradient = opt.apply_gradients(calc_averaged_gradient, global_step=global_step)
 
+        # Add histograms for trainable variables.
+        for var in tf.trainable_variables():
+            summaries.append(tf.summary.histogram(var.op.name, var))
+
+        # Track the moving averages of all trainable variables.
+        # Note that we maintain a "double-average" of the BatchNormalization
+        # global statistics. This is more complicated then need be but we employ
+        # this for backward-compatibility with our previous models.
+        variable_averages = tf.train.ExponentialMovingAverage(
+            inception.MOVING_AVERAGE_DECAY, global_step)
+
+        # Another possibility is to use tf.slim.get_variables().
+        variables_to_average = (tf.trainable_variables() +
+                                tf.moving_average_variables())
+        variables_averages_op = variable_averages.apply(variables_to_average)
+
         # Group all updates to into a single train op.
-        # batchnorm_updates_op = tf.group(*batchnorm_updates)
-        train_op = tf.group(apply_gradient)
+        batchnorm_updates_op = tf.group(*bn_list_placeholder)
+        train_op = tf.group(apply_gradient, variables_averages_op, batchnorm_updates_op)
 
         # Create a saver.
         saver = tf.train.Saver(tf.global_variables())
@@ -376,15 +400,29 @@ def train(dataset):
             start_time = time.time()
 
             subbatch_gradients = []
+            subbatch_batchnorm_updates = []
             for sub_batch_idx in range(FLAGS.num_sub_batches_per_batch):
                 tower_grads, batchnorm_updates = sess.run((get_tower_grads, get_batchnorm_updates))
                 subbatch_gradients += tower_grads
+                subbatch_batchnorm_updates += batchnorm_updates
                 sys.stdout.write('*')
             print()
 
-            av_gradient_feed, _ = tfc.create_feed_based_on(subbatch_gradients, 'tower_grads', is_variable)
+            av_gradient_feed, _ = tfc.create_feed_based_on(
+                subbatch_gradients,
+                'tower_grads',
+                tg_list_is_variable)
 
-            sess.run(apply_gradient, av_gradient_feed)
+            batchnorm_updates_feed, _ = tfc.create_feed_based_on(
+                subbatch_batchnorm_updates,
+                'batch_norm_updates',
+                bn_list_is_variable)
+
+            # Merge the two feeds
+            train_feed = av_gradient_feed.copy()
+            train_feed.update(batchnorm_updates_feed)
+
+            sess.run(train_op, train_feed)
             loss_values = sess.run(calc_loss)
             av_loss = sum(loss_values) / float(len(loss_values))
 
