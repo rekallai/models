@@ -70,6 +70,17 @@ py_binary(
 )
 
 py_binary(
+    name = "imagenet_eval_no_moving_average",
+    srcs = [
+        "imagenet_eval_no_moving_average.py",
+    ],
+    deps = [
+        ":imagenet_data",
+        ":inception_eval_no_moving_average",
+    ],
+)
+
+py_binary(
     name = "flowers_eval",
     srcs = [
         "flowers_eval.py",
@@ -84,6 +95,17 @@ py_library(
     name = "inception_eval",
     srcs = [
         "inception_eval.py",
+    ],
+    deps = [
+        ":image_processing",
+        ":inception",
+    ],
+)
+
+py_library(
+    name = "inception_eval_no_moving_average",
+    srcs = [
+        "inception_eval_no_moving_average.py",
     ],
     deps = [
         ":image_processing",
