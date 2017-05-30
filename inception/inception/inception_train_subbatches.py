@@ -151,7 +151,6 @@ def calc_gradients(opt, images_splits, labels_splits, num_classes):
 
                 REUSE_VARIABLES = True
 
-                # Retain the summaries from the final tower.
                 summaries.append(tf.get_collection(tf.GraphKeys.SUMMARIES, scope))
 
                 batchnorm_updates.append(tf.get_collection(slim.ops.UPDATE_OPS_COLLECTION, scope))
@@ -269,6 +268,19 @@ def average_gradients(tower_grads):
 
 
 def train(dataset):
+
+    # Algorithm for using subbatches (each step is a session run, except 2)):
+    # 0) Get images and labels for current batch [CPU]
+    # 1) Calc logits for complete batch [CPU]
+    # (consequence is that also complete batch mean and variance are used for batch normalisation)
+    # 2) Collect moving average operations for batch normalisation
+    # 3) Calc loss using batch(??) logits [CPU]
+    # 4) calc subbatch gradient using subbatch of loss [GPU]
+    # 5) calc average gradient
+    # 6) update weights
+    # 7) update moving average of weights
+    # 8) run the collected batch normalisation operations from 2)
+
     """Train on dataset for a number of steps."""
     with tf.Graph().as_default(), tf.device('/cpu:0'):
         # Create a variable to count the number of train() calls. This equals the
