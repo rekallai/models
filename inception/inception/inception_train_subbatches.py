@@ -94,20 +94,19 @@ RMSPROP_EPSILON = 1.0  # Epsilon term for RMSProp.
 REUSE_VARIABLES = None
 
 
-def get_new_image_and_label_batch_splits(
+def get_new_batch(
         dataset,
         batch_size,
         num_gpus=FLAGS.num_gpus,
         num_preprocess_threads_per_gpu=FLAGS.num_preprocess_threads):
     """
-    
     Returns new image label batch split in sub-batches per GPU
-    
-    :param dataset: 
-    :param batch_size: 
-    :param num_gpus: 
-    :param num_preprocess_threads_per_gpu: 
-    :return: 
+
+    :param dataset:
+    :param batch_size:
+    :param num_gpus:
+    :param num_preprocess_threads_per_gpu:
+    :return:
     """
 
     # Get images and labels for ImageNet and split the batch across GPUs.
@@ -123,109 +122,105 @@ def get_new_image_and_label_batch_splits(
         num_preprocess_threads=num_preprocess_threads)
 
     # Split the batch of images and labels for towers.
-    images_splits = tf.split(axis=0, num_or_size_splits=num_gpus, value=images)
-    labels_splits = tf.split(axis=0, num_or_size_splits=num_gpus, value=labels)
+    image_batch_per_gpu = tf.split(axis=0, num_or_size_splits=num_gpus, value=images)
+    label_batch_per_gpu = tf.split(axis=0, num_or_size_splits=num_gpus, value=labels)
 
-    return images_splits, labels_splits
+    return image_batch_per_gpu, label_batch_per_gpu
 
 
-def calc_gradients(opt, images_splits, labels_splits, num_classes):
+def calc_logits(image_batch_per_gpu, num_classes):
     # ugh, I know
     global REUSE_VARIABLES
 
-    # Calculate the gradients for each model tower.
-    tower_grads = []
-    batchnorm_updates = []
-    loss = []
-    summaries = []
-    for i in range(FLAGS.num_gpus):
-        with tf.device('/gpu:%d' % i):
-            with tf.name_scope('%s_%d' % (inception.TOWER_NAME, i)) as scope:
-                # Force all Variables to reside on the CPU.
-                with slim.arg_scope([slim.variables.variable], device='/cpu:0'):
-                    # Calculate the loss for one tower of the ImageNet model. This
-                    # function constructs the entire ImageNet model but shares the
-                    # variables across all towers.
-                    batch_loss = _tower_loss(images_splits[i], labels_splits[i], num_classes,
-                                       scope, REUSE_VARIABLES)
-
-                REUSE_VARIABLES = True
-
-                summaries.append(tf.get_collection(tf.GraphKeys.SUMMARIES, scope))
-
-                batchnorm_updates.append(tf.get_collection(slim.ops.UPDATE_OPS_COLLECTION, scope))
-
-                loss.append(batch_loss)
-
-                # Calculate the gradients for the batch of data on this ImageNet
-                # tower.
-                grads = opt.compute_gradients(batch_loss)
-
-                # Keep track of the gradients across all towers.
-                tower_grads.append(grads)
-
-    return tower_grads, batchnorm_updates, loss, summaries
-
-
-def _tower_loss(images, labels, num_classes, scope, reuse_variables=None):
-    """Calculate the total loss on a single tower running the ImageNet model.
-  
-    We perform 'batch splitting'. This means that we cut up a batch across
-    multiple GPU's. For instance, if the batch size = 32 and num_gpus = 2,
-    then each tower will operate on an batch of 16 images.
-  
-    Args:
-      images: Images. 4D tensor of size [batch_size, FLAGS.image_size,
-                                         FLAGS.image_size, 3].
-      labels: 1-D integer Tensor of [batch_size].
-      num_classes: number of classes
-      scope: unique prefix string identifying the ImageNet tower, e.g.
-        'tower_0'.
-  
-    Returns:
-       Tensor of shape [] containing the total loss for a batch of data
-    """
     # When fine-tuning a model, we do not restore the logits but instead we
     # randomly initialize the logits. The number of classes in the output of the
     # logit is the number of classes in specified Dataset.
     restore_logits = not FLAGS.fine_tune
 
-    # Build inference Graph.
-    with tf.variable_scope(tf.get_variable_scope(), reuse=reuse_variables):
-        logits = inception.inference(images, num_classes, for_training=True,
-                                     restore_logits=restore_logits,
-                                     scope=scope)
+    logits_per_gpu = []
+    batchnorm_updates_per_gpu = []
+    for i in range(FLAGS.num_gpus):
+        with tf.name_scope('%s_%d' % (inception.TOWER_NAME, i)) as scope:
+            with slim.arg_scope([slim.variables.variable], device='/cpu:0'):
+                # Build inference Graph.
+                with tf.variable_scope(tf.get_variable_scope(), reuse=REUSE_VARIABLES):
+                    logits = inception.inference(image_batch_per_gpu[i],
+                                                 num_classes,
+                                                 for_training=True,
+                                                 restore_logits=restore_logits,
+                                                 scope=scope)
 
-    # Build the portion of the Graph calculating the losses. Note that we will
-    # assemble the total_loss using a custom function below.
-    split_batch_size = images.get_shape().as_list()[0]
-    inception.loss(logits, labels, batch_size=split_batch_size)
+        logits_per_gpu.append(logits)
+        batchnorm_updates_per_gpu.append(tf.get_collection(slim.ops.UPDATE_OPS_COLLECTION, scope))
 
-    # Assemble all of the losses for the current tower only.
-    losses = tf.get_collection(slim.losses.LOSSES_COLLECTION, scope)
+        REUSE_VARIABLES = True
 
-    # Calculate the total loss for the current tower.
-    regularization_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
-    total_loss = tf.add_n(losses + regularization_losses, name='total_loss')
+    return logits_per_gpu, batchnorm_updates_per_gpu
 
-    # Compute the moving average of all individual losses and the total loss.
-    loss_averages = tf.train.ExponentialMovingAverage(0.9, name='avg')
-    loss_averages_op = loss_averages.apply(losses + [total_loss])
 
-    # Attach a scalar summmary to all individual losses and the total loss; do the
-    # same for the averaged version of the losses.
-    for l in losses + [total_loss]:
-        # Remove 'tower_[0-9]/' from the name in case this is a multi-GPU training
-        # session. This helps the clarity of presentation on TensorBoard.
-        loss_name = re.sub('%s_[0-9]*/' % inception.TOWER_NAME, '', l.op.name)
-        # Name each loss as '(raw)' and name the moving average version of the loss
-        # as the original loss name.
-        tf.summary.scalar(loss_name + ' (raw)', l)
-        tf.summary.scalar(loss_name, loss_averages.average(l))
+def calc_loss(logits_per_gpu, labels_per_gpu):
+    total_loss_per_gpu = []
+    for i in range(FLAGS.num_gpus):
+        with tf.name_scope('%s_%d' % (inception.TOWER_NAME, i)) as scope:
+            with slim.arg_scope([slim.variables.variable], device='/cpu:0'):
+                # Build inference Graph.
+                # Build the portion of the Graph calculating the losses. Note that we will
+                # assemble the total_loss using a custom function below.
+                split_batch_size = labels_per_gpu[i].get_shape().as_list()[0]
+                inception.loss(logits_per_gpu[i], labels_per_gpu[i], batch_size=split_batch_size)
 
-    with tf.control_dependencies([loss_averages_op]):
-        total_loss = tf.identity(total_loss)
-    return total_loss
+                # Assemble all of the losses for the current tower only.
+                losses = tf.get_collection(slim.losses.LOSSES_COLLECTION, scope)
+
+                # Calculate the total loss for the current tower.
+                regularization_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
+                total_loss = tf.add_n(losses + regularization_losses, name='total_loss')
+
+                # Compute the moving average of all individual losses and the total loss.
+                loss_averages = tf.train.ExponentialMovingAverage(0.9, name='avg')
+                loss_averages_op = loss_averages.apply(losses + [total_loss])
+
+                # Attach a scalar summary to all individual losses and the total loss; do the
+                # same for the averaged version of the losses.
+                for l in losses + [total_loss]:
+                    # Remove 'tower_[0-9]/' from the name in case this is a multi-GPU training
+                    # session. This helps the clarity of presentation on TensorBoard.
+                    loss_name = re.sub('%s_[0-9]*/' % inception.TOWER_NAME, '', l.op.name)
+                    # Name each loss as '(raw)' and name the moving average version of the loss
+                    # as the original loss name.
+                    tf.summary.scalar(loss_name + ' (raw)', l)
+                    tf.summary.scalar(loss_name, loss_averages.average(l))
+
+                with tf.control_dependencies([loss_averages_op]):
+                    total_loss = tf.identity(total_loss)
+                total_loss_per_gpu.append(total_loss)
+
+    return total_loss_per_gpu
+
+
+def get_summaries():
+    summaries = []
+    for i in range(FLAGS.num_gpus):
+        with tf.name_scope('%s_%d' % (inception.TOWER_NAME, i)) as scope:
+            summaries.append(tf.get_collection(tf.GraphKeys.SUMMARIES, scope))
+
+    return summaries
+
+
+def calc_gradients(opt, subbatch_total_loss_per_gpu):
+    # Calculate the gradients for each model tower.
+    subbatch_towergrads = []
+    for i in range(FLAGS.num_gpus):
+        with tf.device('/gpu:%d' % i):
+            with tf.name_scope('%s_%d' % (inception.TOWER_NAME, i)) as scope:
+                # Calculate the gradients for the batch of data on this ImageNet
+                # tower.
+                grads = opt.compute_gradients(subbatch_total_loss_per_gpu[i])
+
+                # Keep track of the gradients across all towers.
+                subbatch_towergrads.append(grads)
+
+    return subbatch_towergrads
 
 
 def average_gradients(tower_grads):
@@ -306,13 +301,17 @@ def train(dataset):
                                         momentum=RMSPROP_MOMENTUM,
                                         epsilon=RMSPROP_EPSILON)
 
-        sub_batch_size = int(FLAGS.batch_size / FLAGS.num_sub_batches_per_batch)
+        batch_size = FLAGS.batch_size
+        num_sub_batches = FLAGS.num_sub_batches_per_batch * FLAGS.num_gpus
 
-        images_splits, labels_splits = get_new_image_and_label_batch_splits(
-            dataset,
-            sub_batch_size,
-            num_gpus=FLAGS.num_gpus,
-            num_preprocess_threads_per_gpu=FLAGS.num_preprocess_threads)
+        # Get images and labels for ImageNet and split the batch across GPUs.
+        assert batch_size % num_sub_batches == 0, \
+            'Batch size must be divisible by (number of GPUs x number of subbatches per batch)'
+
+        batch_size_per_gpu = int(FLAGS.batch_size / FLAGS.num_gpus)
+        sub_batch_size_per_gpu = int(batch_size_per_gpu / FLAGS.num_sub_batches_per_batch)
+
+        image_batch_per_gpu, label_batch_per_gpu = get_new_batch(dataset, FLAGS.batch_size)
 
         input_summaries = copy.copy(tf.get_collection(tf.GraphKeys.SUMMARIES))
 
@@ -320,11 +319,20 @@ def train(dataset):
         # Label 0 is reserved for an (unused) background class.
         num_classes = dataset.num_classes() + 1
 
-        get_tower_grads, do_batchnorm_updates, calc_loss, summaries = calc_gradients(
-            opt,
-            images_splits,
-            labels_splits,
-            num_classes)
+        logits_per_gpu, batchnorm_updates_per_gpu = calc_logits(image_batch_per_gpu, num_classes)
+        calc_total_loss_per_gpu = calc_loss(logits_per_gpu, label_batch_per_gpu)
+
+        summaries = get_summaries()
+
+        # Create the placeholder structure to connect all the subbatch gradient data to the averaging step
+        subbatch_total_loss_per_gpu_placeholder = []
+        counter = -1
+        is_variable = dict()
+        for gpu_idx in range(FLAGS.num_gpus):
+            name = 'subbatch_total_loss_%i' % gpu_idx
+            subbatch_total_loss_per_gpu_placeholder[gpu_idx] = tf.placeholder(tf.float32, name)
+
+        calc_subbatch_towergrads =  calc_gradients(opt, subbatch_total_loss_per_gpu_placeholder)
 
         # Create the placeholder structure to connect all the subbatch gradient data to the averaging step
         tower_grads_list_placeholder = []
@@ -332,8 +340,8 @@ def train(dataset):
         is_variable = dict()
         for sub_batch_idx in range(FLAGS.num_sub_batches_per_batch):
             tower_grads_placeholder, counter, is_variable = tfc.create_placeholder_for(
-                get_tower_grads,
-                'tower_grads',
+                calc_subbatch_towergrads,
+                'subbatch_tower_grads',
                 counter,
                 is_variable)
             tower_grads_list_placeholder += tower_grads_placeholder
@@ -400,10 +408,25 @@ def train(dataset):
         for step in range(FLAGS.max_steps):
             start_time = time.time()
 
+            total_loss_per_gpu = sess.run(calc_total_loss_per_gpu)
+
             subbatch_gradients = []
             for sub_batch_idx in range(FLAGS.num_sub_batches_per_batch):
-                tower_grads, _ = sess.run((get_tower_grads, do_batchnorm_updates))
-                subbatch_gradients += tower_grads
+
+                loss_feed = dict()
+                for gpu_idx in range(FLAGS.num_gpus):
+                    start_idx = sub_batch_idx*sub_batch_size_per_gpu
+                    end_idx = (sub_batch_idx+1) * sub_batch_size_per_gpu
+
+                    subbatch_loss = tf.gather(total_loss_per_gpu[gpu_idx], range(start_idx, end_idx))
+                    subbatch_loss = tf.squeeze(subbatch_loss)
+
+                    loss_feed['subbatch_total_loss_%i' % gpu_idx] = subbatch_loss
+
+                subbatch_tower_grads = sess.run(calc_subbatch_towergrads, loss_feed)
+
+                subbatch_gradients += subbatch_tower_grads
+
                 sys.stdout.write('*')
 
             av_gradient_feed, _ = tfc.create_feed_based_on(subbatch_gradients, 'tower_grads', is_variable)
