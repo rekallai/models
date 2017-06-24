@@ -378,11 +378,6 @@ def train(dataset):
             restorer.restore(sess, FLAGS.pretrained_model_checkpoint_path)
             print('%s: Pre-trained model restored from %s' %
                   (datetime.now(), FLAGS.pretrained_model_checkpoint_path))
-            last_global_step = sess.run(global_step)
-            print("Last global step   = %d" % last_global_step)
-
-            last_lr = sess.run(lr)
-            print("Last learning rate = %d" % last_lr)
 
         tf.train.start_queue_runners(sess=sess)
 
@@ -390,7 +385,7 @@ def train(dataset):
             FLAGS.train_dir,
             graph=sess.graph)
 
-        for step in range(FLAGS.max_steps):
+        for step in range(global_step, FLAGS.max_steps):
             start_time = time.time()
 
             subbatch_gradients = []
