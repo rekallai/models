@@ -370,6 +370,7 @@ def train(dataset):
             log_device_placement=FLAGS.log_device_placement))
         sess.run(init)
 
+        last_step = 0
         if FLAGS.pretrained_model_checkpoint_path:
             #assert tf.gfile.Exists(FLAGS.pretrained_model_checkpoint_path)
             variables_to_restore = tf.get_collection(
@@ -379,13 +380,19 @@ def train(dataset):
             print('%s: Pre-trained model restored from %s' %
                   (datetime.now(), FLAGS.pretrained_model_checkpoint_path))
 
+            # HACK : global step is not saved
+            last_step = int(os.path.basename(FLAGS.pretrained_model_checkpoint_path).split('-')[1])
+
+            # asign to global set
+            sess.run(global_step.assign(last_step))
+
         tf.train.start_queue_runners(sess=sess)
 
         summary_writer = tf.summary.FileWriter(
             FLAGS.train_dir,
             graph=sess.graph)
 
-        for step in range(global_step, FLAGS.max_steps):
+        for step in range(last_step + 1, FLAGS.max_steps):
             start_time = time.time()
 
             subbatch_gradients = []
