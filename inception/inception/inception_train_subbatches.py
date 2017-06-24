@@ -380,7 +380,6 @@ def train(dataset):
                   (datetime.now(), FLAGS.pretrained_model_checkpoint_path))
             last_global_step = sess.run(global_step)
             print("Last global step   = %d" % last_global_step)
-            print("     global step   = %d" % global_step)
 
             last_lr = sess.run(lr)
             print("Last learning rate = %d" % last_lr)
